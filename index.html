@@ -1,1 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
+  <title>FCPLG Attendance</title>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <div class="container">
+
+    <div class="header">
+      <h1>FCPLG Attendance</h1>
+      <p>Face Verified Attendance System</p>
+    </div>
+
+    <div class="card">
+
+      <!-- STEP 1 -->
+      <div id="initialStep">
+
+        <h2>Enter Your Initials</h2>
+
+        <input
+          type="text"
+          id="initials"
+          placeholder="e.g. SP"
+          maxlength="5"
+          autocomplete="off"
+        >
+
+        <button id="continueBtn">
+          CONTINUE
+        </button>
+
+        <div id="employeeInfo" class="employee-info hidden"></div>
+
+      </div>
+
+      <!-- STEP 2 -->
+      <div id="verificationStep" class="hidden">
+
+        <h2>Face Verification</h2>
+
+        <div id="employeeDisplay" class="employee-display"></div>
+
+        <div class="camera-container">
+
+          <video
+            id="video"
+            autoplay
+            muted
+            playsinline
+          ></video>
+
+          <canvas id="overlay"></canvas>
+
+        </div>
+
+        <div id="cameraStatus" class="status">
+          Starting camera...
+        </div>
+
+        <button id="verifyBtn" disabled>
+          VERIFY FACE
+        </button>
+
+      </div>
+
+      <!-- RESULT -->
+      <div id="result" class="result hidden"></div>
+
+    </div>
+
+    <div class="footer">
+      <span>FCPLG</span>
+      <span>Attendance System</span>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+
+</body>
+</html>
