@@ -1,54 +1,18 @@
 /* =========================================================
    FCPLG ATTENDANCE SYSTEM
    FRONTEND APPLICATION
-
-   FLOW:
-
-   Initials
-      ↓
-   Employee Lookup
-      ↓
-   Face Data Lookup
-      ↓
-   Camera
-      ↓
-   Face Registration / Verification
-      ↓
-   GPS
-      ↓
-   Google Apps Script
-      ↓
-   Attendance Sheet
-   ========================================================= */
-
-
-/* =========================================================
-   CONFIGURATION
    ========================================================= */
 
 const CONFIG = {
-
-    // YOUR GOOGLE APPS SCRIPT WEB APP
     GOOGLE_APPS_SCRIPT_URL:
         "https://script.google.com/macros/s/AKfycbwX0scaFHFCJ8OdUYOZl3_IEhbJKHGTNYTm-Ih9piKOZc4CXIGYhHHguRjM_b16qYS2Vw/exec",
 
-    // Face matching threshold
-    // Lower = stricter
     FACE_MATCH_THRESHOLD: 0.52,
 
-    // Camera
     CAMERA_WIDTH: 640,
     CAMERA_HEIGHT: 480,
 
-    // Verification timeout
-    VERIFICATION_TIMEOUT: 15000,
-
-    // Optional frontend geofence
-    // Backend already performs the actual geofence check.
-    OFFICE_LATITUDE: null,
-    OFFICE_LONGITUDE: null,
-
-    GEOFENCE_RADIUS_METERS: 50
+    LOCATION_TIMEOUT: 15000
 };
 
 
@@ -57,14 +21,12 @@ const CONFIG = {
    ========================================================= */
 
 const EMPLOYEES = {
-
     "SP": {
         initials: "SP",
         name: "Suryansh Pal",
         designation: "Executive",
         department: "FCPLG"
     }
-
 };
 
 
@@ -73,15 +35,11 @@ const EMPLOYEES = {
    ========================================================= */
 
 let currentEmployee = null;
-
 let cameraStream = null;
-
-let faceApiLoaded = false;
-
-let modelsLoaded = false;
-
 let referenceDescriptor = null;
 
+let faceApiLoaded = false;
+let modelsLoaded = false;
 let verificationRunning = false;
 
 
@@ -124,63 +82,45 @@ const result =
 
 
 /* =========================================================
-   APPLICATION START
+   START
    ========================================================= */
 
-document.addEventListener(
-    "DOMContentLoaded",
-    function () {
+document.addEventListener("DOMContentLoaded", () => {
 
-        console.log(
-            "FCPLG Attendance System started."
-        );
-
-        if (!initialsInput || !continueBtn) {
-
-            console.error(
-                "Required HTML elements are missing."
-            );
-
-            return;
-        }
-
-
-        continueBtn.addEventListener(
-            "click",
-            handleInitials
-        );
-
-
-        initialsInput.addEventListener(
-            "keydown",
-            function (event) {
-
-                if (event.key === "Enter") {
-
-                    handleInitials();
-
-                }
-
-            }
-        );
-
-
-        if (verifyBtn) {
-
-            verifyBtn.addEventListener(
-                "click",
-                verifyFace
-            );
-
-        }
-
+    if (!initialsInput || !continueBtn) {
+        console.error("Required HTML elements are missing.");
+        return;
     }
-);
+
+    continueBtn.addEventListener(
+        "click",
+        handleInitials
+    );
+
+    initialsInput.addEventListener(
+        "keydown",
+        event => {
+            if (event.key === "Enter") {
+                handleInitials();
+            }
+        }
+    );
+
+    if (verifyBtn) {
+        verifyBtn.addEventListener(
+            "click",
+            verifyFace
+        );
+    }
+
+    console.log(
+        "FCPLG Attendance System loaded."
+    );
+});
 
 
 /* =========================================================
-   STEP 1
-   EMPLOYEE LOOKUP
+   STEP 1 — INITIALS
    ========================================================= */
 
 async function handleInitials() {
@@ -192,7 +132,6 @@ async function handleInitials() {
             .trim()
             .toUpperCase();
 
-
     if (!initials) {
 
         showResult(
@@ -203,32 +142,14 @@ async function handleInitials() {
         return;
     }
 
-
-    if (initials.length < 2) {
-
-        showResult(
-            "error",
-            "Please enter valid initials."
-        );
-
-        return;
-    }
-
-
     continueBtn.disabled = true;
-
-    continueBtn.textContent =
-        "CHECKING...";
-
+    continueBtn.textContent = "CHECKING...";
 
     try {
 
         let employee = null;
 
-
-        /* -------------------------------------------------
-           LOOKUP EMPLOYEE FROM GOOGLE APPS SCRIPT
-           ------------------------------------------------- */
+        /* Try Google Apps Script first */
 
         try {
 
@@ -240,24 +161,18 @@ async function handleInitials() {
         } catch (error) {
 
             console.warn(
-                "Server employee lookup failed:",
+                "Server lookup failed:",
                 error
             );
 
         }
 
-
-        /* -------------------------------------------------
-           LOCAL FALLBACK
-           ------------------------------------------------- */
+        /* Local fallback */
 
         if (!employee) {
-
             employee =
                 EMPLOYEES[initials];
-
         }
-
 
         if (!employee) {
 
@@ -269,99 +184,188 @@ async function handleInitials() {
             return;
         }
 
-
-        /* -------------------------------------------------
-           STORE EMPLOYEE
-           ------------------------------------------------- */
-
         currentEmployee = employee;
-
 
         displayEmployee(
             currentEmployee
         );
 
+        setCameraStatus(
+            "Checking registered face..."
+        );
 
-        /* -------------------------------------------------
-           START CAMERA / FACE SYSTEM
-           ------------------------------------------------- */
+        referenceDescriptor =
+            await getSavedFaceFromServer(
+                currentEmployee.initials
+            );
 
         await startVerificationStep();
-
 
     } catch (error) {
 
         console.error(
-            "Employee lookup error:",
+            "Initialisation error:",
             error
         );
 
         showResult(
             "error",
-            "Unable to verify employee details."
+            error.message ||
+            "Unable to start attendance verification."
         );
-
 
     } finally {
 
         continueBtn.disabled = false;
-
-        continueBtn.textContent =
-            "CONTINUE";
+        continueBtn.textContent = "CONTINUE";
 
     }
-
 }
 
 
 /* =========================================================
-   GOOGLE APPS SCRIPT
    EMPLOYEE LOOKUP
    ========================================================= */
 
-function lookupEmployeeFromServer(
+async function lookupEmployeeFromServer(
     initials
 ) {
 
-    return jsonpRequest(
-        "lookup",
-        {
-            initials: initials
-        }
-    ).then(
-        function (data) {
+    const url =
+        CONFIG.GOOGLE_APPS_SCRIPT_URL +
+        "?action=lookup&initials=" +
+        encodeURIComponent(initials) +
+        "&_=" +
+        Date.now();
 
-            if (!data || !data.success) {
-
-                return null;
-
+    const response =
+        await fetch(
+            url,
+            {
+                method: "GET",
+                cache: "no-store"
             }
+        );
 
-            return {
+    if (!response.ok) {
+        throw new Error(
+            "Employee lookup failed: HTTP " +
+            response.status
+        );
+    }
 
-                initials:
-                    data.initials,
+    const data =
+        await response.json();
 
-                name:
-                    data.name,
-
-                email:
-                    data.email,
-
-                department:
-                    data.department,
-
-                designation:
-                    data.designation,
-
-                status:
-                    data.status
-
-            };
-
-        }
+    console.log(
+        "Employee lookup:",
+        data
     );
 
+    if (!data.success) {
+        return null;
+    }
+
+    return (
+        data.employee ||
+        data.data ||
+        null
+    );
+}
+
+
+/* =========================================================
+   GET SAVED FACE
+   ========================================================= */
+
+async function getSavedFaceFromServer(
+    initials
+) {
+
+    try {
+
+        const url =
+            CONFIG.GOOGLE_APPS_SCRIPT_URL +
+            "?action=getface&initials=" +
+            encodeURIComponent(initials) +
+            "&_=" +
+            Date.now();
+
+        const response =
+            await fetch(
+                url,
+                {
+                    method: "GET",
+                    cache: "no-store"
+                }
+            );
+
+        if (!response.ok) {
+            throw new Error(
+                "Face lookup failed: HTTP " +
+                response.status
+            );
+        }
+
+        const data =
+            await response.json();
+
+        console.log(
+            "Saved face response:",
+            data
+        );
+
+        if (!data.success) {
+            return null;
+        }
+
+        let descriptor =
+            data.faceDescriptor ||
+            data.descriptor ||
+            data.face ||
+            data.data;
+
+        if (!descriptor) {
+            return null;
+        }
+
+        if (typeof descriptor === "string") {
+
+            try {
+
+                descriptor =
+                    JSON.parse(descriptor);
+
+            } catch (error) {
+
+                console.error(
+                    "Could not parse face descriptor:",
+                    error
+                );
+
+                return null;
+            }
+        }
+
+        if (
+            Array.isArray(descriptor) &&
+            descriptor.length > 0
+        ) {
+
+            return descriptor;
+        }
+
+        return null;
+
+    } catch (error) {
+
+        console.warn(
+            "No registered face found:",
+            error
+        );
+
+        return null;
+    }
 }
 
 
@@ -377,11 +381,14 @@ function displayEmployee(
         <strong>
             ${escapeHtml(employee.name)}
         </strong>
+
         <br>
+
         <span>
             ${escapeHtml(
                 employee.designation || ""
             )}
+
             ${
                 employee.department
                     ? " • " +
@@ -393,7 +400,6 @@ function displayEmployee(
         </span>
     `;
 
-
     if (employeeInfo) {
 
         employeeInfo.classList.remove(
@@ -402,89 +408,67 @@ function displayEmployee(
 
         employeeInfo.innerHTML =
             html;
-
     }
-
 
     if (employeeDisplay) {
 
         employeeDisplay.innerHTML =
             html;
-
     }
-
 }
 
 
 /* =========================================================
-   STEP 2
    START VERIFICATION
    ========================================================= */
 
 async function startVerificationStep() {
 
     if (initialStep) {
-
         initialStep.classList.add(
             "hidden"
         );
-
     }
 
-
     if (verificationStep) {
-
         verificationStep.classList.remove(
             "hidden"
         );
-
     }
-
 
     if (verifyBtn) {
-
         verifyBtn.disabled = true;
-
     }
 
+    clearResult();
 
     setCameraStatus(
         "Loading face verification system..."
     );
 
-
     try {
 
         await loadFaceApi();
-
 
         setCameraStatus(
             "Loading face recognition models..."
         );
 
-
         await loadFaceModels();
-
 
         setCameraStatus(
             "Requesting camera permission..."
         );
 
-
         await startCamera();
-
 
         setCameraStatus(
             "Camera ready. Position your face inside the frame."
         );
 
-
         if (verifyBtn) {
-
             verifyBtn.disabled = false;
-
         }
-
 
     } catch (error) {
 
@@ -493,19 +477,15 @@ async function startVerificationStep() {
             error
         );
 
-
         setCameraStatus(
-            "Unable to start camera or face verification."
+            "Unable to start camera."
         );
-
 
         showResult(
             "error",
             getFriendlyCameraError(error)
         );
-
     }
-
 }
 
 
@@ -519,83 +499,58 @@ function loadFaceApi() {
         faceApiLoaded &&
         window.faceapi
     ) {
-
         return Promise.resolve();
-
     }
 
-
     return new Promise(
-        function (
-            resolve,
-            reject
-        ) {
+        (resolve, reject) => {
 
             if (window.faceapi) {
 
                 faceApiLoaded = true;
-
                 resolve();
-
                 return;
-
             }
-
 
             const script =
                 document.createElement(
                     "script"
                 );
 
-
             script.src =
                 "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js";
 
+            script.onload = () => {
 
-            script.onload =
-                function () {
+                if (window.faceapi) {
 
-                    if (
-                        window.faceapi
-                    ) {
+                    faceApiLoaded = true;
+                    resolve();
 
-                        faceApiLoaded =
-                            true;
-
-                        resolve();
-
-                    } else {
-
-                        reject(
-                            new Error(
-                                "face-api.js loaded but is unavailable."
-                            )
-                        );
-
-                    }
-
-                };
-
-
-            script.onerror =
-                function () {
+                } else {
 
                     reject(
                         new Error(
-                            "Could not load face-api.js."
+                            "Face recognition library unavailable."
                         )
                     );
+                }
+            };
 
-                };
+            script.onerror = () => {
 
+                reject(
+                    new Error(
+                        "Could not load face recognition library."
+                    )
+                );
+            };
 
             document.head.appendChild(
                 script
             );
-
         }
     );
-
 }
 
 
@@ -606,52 +561,36 @@ function loadFaceApi() {
 async function loadFaceModels() {
 
     if (modelsLoaded) {
-
         return;
-
     }
-
 
     const MODEL_URL =
         "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
 
-
     await faceapi.nets.tinyFaceDetector
-        .loadFromUri(
-            MODEL_URL
-        );
-
+        .loadFromUri(MODEL_URL);
 
     await faceapi.nets.faceLandmark68Net
-        .loadFromUri(
-            MODEL_URL
-        );
-
+        .loadFromUri(MODEL_URL);
 
     await faceapi.nets.faceRecognitionNet
-        .loadFromUri(
-            MODEL_URL
-        );
-
+        .loadFromUri(MODEL_URL);
 
     modelsLoaded = true;
-
 
     console.log(
         "Face recognition models loaded."
     );
-
 }
 
 
 /* =========================================================
-   START CAMERA
+   CAMERA
    ========================================================= */
 
 async function startCamera() {
 
     stopCamera();
-
 
     if (
         !navigator.mediaDevices ||
@@ -661,59 +600,40 @@ async function startCamera() {
         throw new Error(
             "Camera API is not supported."
         );
-
     }
-
 
     cameraStream =
         await navigator.mediaDevices
-            .getUserMedia(
-                {
-                    video: {
-
-                        facingMode:
-                            "user",
-
-                        width: {
-
-                            ideal:
-                                CONFIG.CAMERA_WIDTH
-
-                        },
-
-                        height: {
-
-                            ideal:
-                                CONFIG.CAMERA_HEIGHT
-
-                        }
-
+            .getUserMedia({
+                video: {
+                    facingMode: "user",
+                    width: {
+                        ideal:
+                            CONFIG.CAMERA_WIDTH
                     },
-
-                    audio: false
-                }
-            );
-
+                    height: {
+                        ideal:
+                            CONFIG.CAMERA_HEIGHT
+                    }
+                },
+                audio: false
+            });
 
     video.srcObject =
         cameraStream;
 
-
     await new Promise(
-        function (resolve) {
+        resolve => {
 
             video.onloadedmetadata =
-                function () {
+                () => {
 
                     video.play()
                         .then(resolve)
                         .catch(resolve);
-
                 };
-
         }
     );
-
 
     if (overlay) {
 
@@ -724,29 +644,19 @@ async function startCamera() {
         overlay.height =
             video.videoHeight ||
             CONFIG.CAMERA_HEIGHT;
-
     }
-
-
-    console.log(
-        "Camera started."
-    );
-
 }
 
 
 /* =========================================================
-   FACE VERIFICATION / REGISTRATION
+   VERIFY FACE
    ========================================================= */
 
 async function verifyFace() {
 
     if (verificationRunning) {
-
         return;
-
     }
-
 
     if (!currentEmployee) {
 
@@ -756,33 +666,24 @@ async function verifyFace() {
         );
 
         return;
-
     }
-
 
     verificationRunning = true;
 
-
     if (verifyBtn) {
-
         verifyBtn.disabled = true;
-
     }
 
-
     clearResult();
-
 
     setCameraStatus(
         "Scanning face..."
     );
 
-
     try {
 
         const detection =
             await detectFace();
-
 
         if (!detection) {
 
@@ -790,188 +691,86 @@ async function verifyFace() {
                 "No clear face detected."
             );
 
-
             showResult(
                 "error",
                 "Face not detected. Please look directly at the camera."
             );
 
             return;
-
         }
-
-
-        setCameraStatus(
-            "Face detected. Checking registered face..."
-        );
-
 
         const currentDescriptor =
             detection.descriptor;
 
-
-        /* =================================================
-           IMPORTANT
-
-           SERVER IS THE SOURCE OF TRUTH.
-
-           DO NOT use localStorage first.
-
-           This fixes the exact problem we had:
-           the phone had a face locally but Google Sheet
-           had nothing.
-           ================================================= */
-
-        let serverFace = null;
-
-
-        try {
-
-            serverFace =
-                await getRegisteredFace(
-                    currentEmployee.initials
-                );
-
-        } catch (error) {
-
-            console.error(
-                "Could not retrieve registered face:",
-                error
-            );
-
-        }
+        setCameraStatus(
+            "Face detected. Checking identity..."
+        );
 
 
         /* =================================================
-           NO SERVER FACE
-           → REGISTER THIS FACE
+           NO SAVED FACE
+           REGISTER CURRENT FACE
            ================================================= */
 
-        if (
-            !serverFace ||
-            !serverFace.enrolled ||
-            !serverFace.descriptor
-        ) {
+        if (!referenceDescriptor) {
 
             setCameraStatus(
-                "No registered face found. Saving your face..."
+                "No registered face found. Registering this face..."
             );
 
-
-            const descriptor =
-                Array.from(
+            const registered =
+                await enrollFaceOnServer(
                     currentDescriptor
                 );
 
+            if (registered) {
 
-            const registrationResult =
-                await registerFaceOnServer(
-                    currentEmployee.initials,
-                    descriptor
+                referenceDescriptor =
+                    Array.from(
+                        currentDescriptor
+                    );
+
+                setCameraStatus(
+                    "Face registration complete."
                 );
 
-
-            if (
-                !registrationResult ||
-                !registrationResult.success
-            ) {
-
-                throw new Error(
-                    registrationResult &&
-                    registrationResult.message
-                        ? registrationResult.message
-                        : "Face registration failed."
+                showResult(
+                    "success",
+                    "Face registered successfully for " +
+                    escapeHtml(
+                        currentEmployee.name
+                    ) +
+                    ". Please press VERIFY FACE again."
                 );
 
+                return;
             }
 
-
-            /* ---------------------------------------------
-               SAVE LOCAL BACKUP ONLY AFTER SERVER SUCCESS
-               --------------------------------------------- */
-
-            referenceDescriptor =
-                descriptor;
-
-
-            localStorage.setItem(
-                "fcplg_face_" +
-                currentEmployee.initials,
-                JSON.stringify(
-                    descriptor
-                )
+            throw new Error(
+                "Face registration failed."
             );
-
-
-            setCameraStatus(
-                "Face registration complete."
-            );
-
-
-            showResult(
-                "success",
-                "Face registered successfully. Your face data has been saved to the attendance system."
-            );
-
-
-            return;
-
         }
 
 
         /* =================================================
-           SERVER FACE EXISTS
-           → USE IT
+           COMPARE FACE
            ================================================= */
 
-        try {
-
-            referenceDescriptor =
-                JSON.parse(
-                    serverFace.descriptor
-                );
-
-        } catch (error) {
-
-            throw new Error(
-                "Registered face data is corrupted."
-            );
-
-        }
-
-
-        if (
-            !Array.isArray(
+        const savedDescriptor =
+            new Float32Array(
                 referenceDescriptor
-            ) ||
-            referenceDescriptor.length === 0
-        ) {
-
-            throw new Error(
-                "Registered face data is invalid."
             );
-
-        }
-
-
-        /* =================================================
-           COMPARE FACES
-           ================================================= */
 
         const distance =
             faceapi.euclideanDistance(
                 currentDescriptor,
-                new Float32Array(
-                    referenceDescriptor
-                )
+                savedDescriptor
             );
-
 
         console.log(
             "Face distance:",
             distance
         );
-
 
         if (
             distance <=
@@ -979,18 +778,15 @@ async function verifyFace() {
         ) {
 
             setCameraStatus(
-                "Face verified successfully."
+                "Face verified. Checking location..."
             );
-
 
             showResult(
                 "success",
                 "Face verified. Checking location..."
             );
 
-
             await markAttendance();
-
 
         } else {
 
@@ -998,14 +794,11 @@ async function verifyFace() {
                 "Face does not match."
             );
 
-
             showResult(
                 "error",
-                "Face does not match the registered face. Please try again."
+                "Face verification failed. Please try again."
             );
-
         }
-
 
     } catch (error) {
 
@@ -1014,35 +807,20 @@ async function verifyFace() {
             error
         );
 
-
         showResult(
             "error",
-            error && error.message
-                ? escapeHtml(
-                    error.message
-                  )
-                : "Face verification could not be completed."
+            error.message ||
+            "Face verification could not be completed."
         );
-
-
-        setCameraStatus(
-            "Face verification failed."
-        );
-
 
     } finally {
 
         verificationRunning = false;
 
-
         if (verifyBtn) {
-
             verifyBtn.disabled = false;
-
         }
-
     }
-
 }
 
 
@@ -1057,74 +835,162 @@ async function detectFace() {
         throw new Error(
             "Face recognition library is not loaded."
         );
-
     }
 
-
     const options =
-        new faceapi.TinyFaceDetectorOptions(
-            {
-                inputSize: 320,
-                scoreThreshold: 0.5
-            }
-        );
+        new faceapi.TinyFaceDetectorOptions({
+            inputSize: 320,
+            scoreThreshold: 0.5
+        });
 
-
-    const detection =
-        await faceapi
-            .detectSingleFace(
-                video,
-                options
-            )
-            .withFaceLandmarks()
-            .withFaceDescriptor();
-
-
-    return detection;
-
+    return await faceapi
+        .detectSingleFace(
+            video,
+            options
+        )
+        .withFaceLandmarks()
+        .withFaceDescriptor();
 }
 
 
 /* =========================================================
-   GET REGISTERED FACE FROM GOOGLE SHEET
+   FACE REGISTRATION
    ========================================================= */
 
-function getRegisteredFace(
-    initials
-) {
-
-    return jsonpRequest(
-        "getface",
-        {
-            initials: initials
-        }
-    );
-
-}
-
-
-/* =========================================================
-   REGISTER FACE ON GOOGLE APPS SCRIPT
-   ========================================================= */
-
-function registerFaceOnServer(
-    initials,
+async function enrollFaceOnServer(
     descriptor
 ) {
 
-    return jsonpRequest(
-        "enroll",
-        {
-            initials:
-                initials,
+    if (!currentEmployee) {
+        return false;
+    }
 
-            descriptor:
-                JSON.stringify(
-                    descriptor
-                )
-        }
+    setCameraStatus(
+        "Saving registered face..."
     );
 
+    const payload = {
+        action: "enroll",
+
+        initials:
+            currentEmployee.initials,
+
+        name:
+            currentEmployee.name,
+
+        designation:
+            currentEmployee.designation,
+
+        department:
+            currentEmployee.department,
+
+        descriptor:
+            Array.from(descriptor)
+    };
+
+    console.log(
+        "Sending face registration..."
+    );
+
+    try {
+
+        /*
+         * IMPORTANT:
+         * Use POST with text/plain.
+         * This avoids the browser sending
+         * a CORS preflight request.
+         */
+
+        const response =
+            await fetch(
+                CONFIG.GOOGLE_APPS_SCRIPT_URL,
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "text/plain;charset=utf-8"
+                    },
+
+                    body:
+                        JSON.stringify(
+                            payload
+                        )
+                }
+            );
+
+        if (!response.ok) {
+
+            throw new Error(
+                "Registration server HTTP " +
+                response.status
+            );
+        }
+
+        const text =
+            await response.text();
+
+        console.log(
+            "Registration raw response:",
+            text
+        );
+
+        let data;
+
+        try {
+
+            data =
+                JSON.parse(text);
+
+        } catch (error) {
+
+            throw new Error(
+                "Google Apps Script returned an invalid response."
+            );
+        }
+
+        console.log(
+            "Registration response:",
+            data
+        );
+
+        if (
+            data &&
+            data.success === true
+        ) {
+
+            return true;
+        }
+
+        if (
+            data &&
+            data.status === "success"
+        ) {
+
+            return true;
+        }
+
+        throw new Error(
+            data && data.message
+                ? data.message
+                : "Google Apps Script rejected face registration."
+        );
+
+    } catch (error) {
+
+        console.error(
+            "Face registration error:",
+            error
+        );
+
+        showResult(
+            "error",
+            "Unable to register your face. " +
+            (error.message || "")
+        );
+
+        return false;
+    }
 }
 
 
@@ -1138,137 +1004,44 @@ async function markAttendance() {
         "Face verified. Checking location..."
     );
 
-
     try {
 
         const position =
             await getCurrentLocation();
 
-
         const latitude =
             position.coords.latitude;
-
 
         const longitude =
             position.coords.longitude;
 
-
         const accuracy =
             position.coords.accuracy;
-
 
         console.log(
             "GPS:",
             latitude,
             longitude,
-            "Accuracy:",
             accuracy
         );
 
-
-        /* =================================================
-           OPTIONAL CLIENT-SIDE GEOFENCE
-           ================================================= */
-
-        if (
-            CONFIG.OFFICE_LATITUDE !== null &&
-            CONFIG.OFFICE_LONGITUDE !== null
-        ) {
-
-            const distance =
-                calculateDistance(
-                    latitude,
-                    longitude,
-                    CONFIG.OFFICE_LATITUDE,
-                    CONFIG.OFFICE_LONGITUDE
-                );
-
-
-            console.log(
-                "Distance from FCPLG:",
-                distance,
-                "metres"
-            );
-
-
-            if (
-                distance >
-                CONFIG.GEOFENCE_RADIUS_METERS
-            ) {
-
-                showResult(
-                    "error",
-                    "You are outside the FCPLG attendance area."
-                );
-
-
-                setCameraStatus(
-                    "Location verification failed."
-                );
-
-
-                return;
-
-            }
-
-        }
-
-
-        /* =================================================
-           SEND TO APPS SCRIPT
-
-           Backend action = attendance
-           ================================================= */
-
         setCameraStatus(
-            "Location verified. Recording attendance..."
+            "Location obtained. Recording attendance..."
         );
 
+        await sendAttendanceToServer({
+            initials:
+                currentEmployee.initials,
 
-        const serverResult =
-            await jsonpRequest(
-                "attendance",
-                {
+            latitude:
+                latitude,
 
-                    initials:
-                        currentEmployee.initials,
+            longitude:
+                longitude,
 
-                    lat:
-                        latitude,
-
-                    lng:
-                        longitude
-
-                }
-            );
-
-
-        if (
-            !serverResult ||
-            !serverResult.success
-        ) {
-
-            throw new Error(
-                serverResult &&
-                serverResult.message
-                    ? serverResult.message
-                    : "Attendance was not recorded."
-            );
-
-        }
-
-
-        setCameraStatus(
-            "Attendance marked successfully."
-        );
-
-
-        showResult(
-            "success",
-            serverResult.message ||
-            "Attendance marked successfully."
-        );
-
+            accuracy:
+                accuracy
+        });
 
     } catch (error) {
 
@@ -1277,238 +1050,16 @@ async function markAttendance() {
             error
         );
 
-
-        showResult(
-            "error",
-            error && error.message
-                ? escapeHtml(
-                    error.message
-                  )
-                : "Face verified, but attendance could not be recorded."
-        );
-
-
         setCameraStatus(
             "Attendance recording failed."
         );
 
+        showResult(
+            "error",
+            error.message ||
+            "Face verified, but attendance could not be recorded."
+        );
     }
-
-}
-
-
-/* =========================================================
-   GOOGLE APPS SCRIPT JSONP REQUEST
-
-   IMPORTANT:
-
-   We intentionally use JSONP instead of fetch().
-
-   GitHub Pages and Google Apps Script are different
-   origins. JSONP avoids the browser CORS problem.
-
-   Your Apps Script backend already supports callback=...
-   ========================================================= */
-
-function jsonpRequest(
-    action,
-    params
-) {
-
-    return new Promise(
-        function (
-            resolve,
-            reject
-        ) {
-
-            const callbackName =
-                "fcplgCallback_" +
-                Date.now() +
-                "_" +
-                Math.floor(
-                    Math.random() * 100000
-                );
-
-
-            let finished = false;
-
-
-            const script =
-                document.createElement(
-                    "script"
-                );
-
-
-            const timeout =
-                setTimeout(
-                    function () {
-
-                        if (finished) {
-                            return;
-                        }
-
-
-                        finished = true;
-
-
-                        cleanup();
-
-
-                        reject(
-                            new Error(
-                                "Google Apps Script request timed out."
-                            )
-                        );
-
-                    },
-                    20000
-                );
-
-
-            function cleanup() {
-
-                clearTimeout(
-                    timeout
-                );
-
-
-                try {
-
-                    delete window[
-                        callbackName
-                    ];
-
-                } catch (error) {
-
-                    window[
-                        callbackName
-                    ] = undefined;
-
-                }
-
-
-                if (
-                    script &&
-                    script.parentNode
-                ) {
-
-                    script.parentNode.removeChild(
-                        script
-                    );
-
-                }
-
-            }
-
-
-            window[
-                callbackName
-            ] =
-                function (data) {
-
-                    if (finished) {
-                        return;
-                    }
-
-
-                    finished = true;
-
-
-                    cleanup();
-
-
-                    resolve(
-                        data
-                    );
-
-                };
-
-
-            const query =
-                new URLSearchParams();
-
-
-            query.set(
-                "action",
-                action
-            );
-
-
-            query.set(
-                "callback",
-                callbackName
-            );
-
-
-            if (params) {
-
-                Object.keys(
-                    params
-                ).forEach(
-                    function (key) {
-
-                        const value =
-                            params[key];
-
-
-                        if (
-                            value !== null &&
-                            value !== undefined
-                        ) {
-
-                            query.set(
-                                key,
-                                String(value)
-                            );
-
-                        }
-
-                    }
-                );
-
-            }
-
-
-            script.src =
-                CONFIG.GOOGLE_APPS_SCRIPT_URL +
-                "?" +
-                query.toString();
-
-
-            script.async =
-                true;
-
-
-            script.onerror =
-                function () {
-
-                    if (finished) {
-                        return;
-                    }
-
-
-                    finished = true;
-
-
-                    cleanup();
-
-
-                    reject(
-                        new Error(
-                            "Unable to connect to Google Apps Script."
-                        )
-                    );
-
-                };
-
-
-            document.body.appendChild(
-                script
-            );
-
-        }
-    );
-
 }
 
 
@@ -1519,131 +1070,157 @@ function jsonpRequest(
 function getCurrentLocation() {
 
     return new Promise(
-        function (
-            resolve,
-            reject
-        ) {
+        (resolve, reject) => {
 
-            if (
-                !navigator.geolocation
-            ) {
+            if (!navigator.geolocation) {
 
                 reject(
                     new Error(
-                        "Geolocation is not supported."
+                        "Geolocation is not supported on this device."
                     )
                 );
 
                 return;
-
             }
 
+            navigator.geolocation.getCurrentPosition(
+                resolve,
 
-            navigator.geolocation
-                .getCurrentPosition(
-                    resolve,
-                    reject,
-                    {
+                error => {
 
-                        enableHighAccuracy:
-                            true,
+                    let message =
+                        "Unable to get your location.";
 
-                        timeout:
-                            10000,
+                    if (
+                        error.code ===
+                        error.PERMISSION_DENIED
+                    ) {
 
-                        maximumAge:
-                            0
-
+                        message =
+                            "Location permission was denied. Please allow location access and try again.";
                     }
-                );
 
+                    if (
+                        error.code ===
+                        error.POSITION_UNAVAILABLE
+                    ) {
+
+                        message =
+                            "Your location could not be determined. Please try again.";
+                    }
+
+                    if (
+                        error.code ===
+                        error.TIMEOUT
+                    ) {
+
+                        message =
+                            "Location request timed out. Please try again.";
+                    }
+
+                    reject(
+                        new Error(
+                            message
+                        )
+                    );
+                },
+
+                {
+                    enableHighAccuracy: true,
+                    timeout:
+                        CONFIG.LOCATION_TIMEOUT,
+                    maximumAge: 0
+                }
+            );
         }
     );
-
 }
 
 
 /* =========================================================
-   DISTANCE CALCULATION
+   SEND ATTENDANCE
    ========================================================= */
 
-function calculateDistance(
-    lat1,
-    lon1,
-    lat2,
-    lon2
+async function sendAttendanceToServer(
+    data
 ) {
 
-    const earthRadius =
-        6371000;
-
-
-    const dLat =
-        toRadians(
-            lat2 - lat1
-        );
-
-
-    const dLon =
-        toRadians(
-            lon2 - lon1
-        );
-
-
-    const a =
-        Math.sin(
-            dLat / 2
-        ) *
-        Math.sin(
-            dLat / 2
+    const url =
+        CONFIG.GOOGLE_APPS_SCRIPT_URL +
+        "?action=attendance" +
+        "&initials=" +
+        encodeURIComponent(
+            data.initials
         ) +
+        "&lat=" +
+        encodeURIComponent(
+            data.latitude
+        ) +
+        "&lng=" +
+        encodeURIComponent(
+            data.longitude
+        ) +
+        "&accuracy=" +
+        encodeURIComponent(
+            data.accuracy
+        ) +
+        "&_=" +
+        Date.now();
 
-        Math.cos(
-            toRadians(lat1)
-        ) *
-        Math.cos(
-            toRadians(lat2)
-        ) *
-
-        Math.sin(
-            dLon / 2
-        ) *
-        Math.sin(
-            dLon / 2
+    const response =
+        await fetch(
+            url,
+            {
+                method: "GET",
+                cache: "no-store"
+            }
         );
 
+    if (!response.ok) {
 
-    const c =
-        2 *
-        Math.atan2(
-            Math.sqrt(a),
-            Math.sqrt(1 - a)
+        throw new Error(
+            "Attendance server HTTP " +
+            response.status
         );
+    }
 
+    const dataFromServer =
+        await response.json();
 
-    return (
-        earthRadius *
-        c
+    console.log(
+        "Attendance response:",
+        dataFromServer
     );
 
-}
+    if (!dataFromServer.success) {
 
+        throw new Error(
+            dataFromServer.message ||
+            "Attendance was not recorded."
+        );
+    }
 
-function toRadians(
-    degrees
-) {
-
-    return (
-        degrees *
-        Math.PI /
-        180
+    setCameraStatus(
+        "Attendance marked successfully."
     );
 
+    showResult(
+        "success",
+        dataFromServer.message ||
+        "Attendance marked successfully."
+    );
+
+    setTimeout(
+        () => {
+            stopCamera();
+        },
+        1000
+    );
 }
 
 
 /* =========================================================
-   CAMERA STATUS
+   STATUS
    ========================================================= */
 
 function setCameraStatus(
@@ -1651,15 +1228,11 @@ function setCameraStatus(
 ) {
 
     if (!cameraStatus) {
-
         return;
-
     }
-
 
     cameraStatus.textContent =
         message;
-
 }
 
 
@@ -1673,11 +1246,8 @@ function showResult(
 ) {
 
     if (!result) {
-
         return;
-
     }
-
 
     result.classList.remove(
         "hidden",
@@ -1685,41 +1255,32 @@ function showResult(
         "error"
     );
 
-
     result.classList.add(
         type
     );
 
-
     result.innerHTML =
         message;
-
 }
 
 
 function clearResult() {
 
     if (!result) {
-
         return;
-
     }
-
 
     result.classList.add(
         "hidden"
     );
-
 
     result.classList.remove(
         "success",
         "error"
     );
 
-
     result.innerHTML =
         "";
-
 }
 
 
@@ -1730,34 +1291,20 @@ function clearResult() {
 function stopCamera() {
 
     if (!cameraStream) {
-
         return;
-
     }
-
 
     cameraStream
         .getTracks()
         .forEach(
-            function (track) {
-
-                track.stop();
-
-            }
+            track => track.stop()
         );
 
-
-    cameraStream =
-        null;
-
+    cameraStream = null;
 
     if (video) {
-
-        video.srcObject =
-            null;
-
+        video.srcObject = null;
     }
-
 }
 
 
@@ -1770,13 +1317,8 @@ function getFriendlyCameraError(
 ) {
 
     if (!error) {
-
-        return (
-            "Unable to access the camera."
-        );
-
+        return "Unable to access the camera.";
     }
-
 
     if (
         error.name ===
@@ -1787,9 +1329,7 @@ function getFriendlyCameraError(
             "Camera permission was denied. " +
             "Please allow camera access and reload the page."
         );
-
     }
-
 
     if (
         error.name ===
@@ -1799,9 +1339,7 @@ function getFriendlyCameraError(
         return (
             "No camera was found on this device."
         );
-
     }
-
 
     if (
         error.name ===
@@ -1811,9 +1349,7 @@ function getFriendlyCameraError(
         return (
             "The camera is being used by another application."
         );
-
     }
-
 
     if (
         error.name ===
@@ -1823,15 +1359,12 @@ function getFriendlyCameraError(
         return (
             "Camera access is blocked by browser security settings."
         );
-
     }
-
 
     return (
         "Unable to access the camera. " +
         "Please check your browser permissions."
     );
-
 }
 
 
@@ -1847,39 +1380,30 @@ function escapeHtml(
         value === null ||
         value === undefined
     ) {
-
         return "";
-
     }
 
-
     return String(value)
-
         .replace(
             /&/g,
             "&amp;"
         )
-
         .replace(
             /</g,
             "&lt;"
         )
-
         .replace(
             />/g,
             "&gt;"
         )
-
         .replace(
             /"/g,
             "&quot;"
         )
-
         .replace(
             /'/g,
             "&#039;"
         );
-
 }
 
 
@@ -1890,134 +1414,52 @@ function escapeHtml(
 window.FCPLG = {
 
     getCurrentEmployee:
-        function () {
-
-            return currentEmployee;
-
-        },
-
+        () => currentEmployee,
 
     clearSavedFace:
-        function () {
-
-            if (!currentEmployee) {
-
-                console.log(
-                    "No employee selected."
-                );
-
-                return;
-
-            }
-
-
-            localStorage.removeItem(
-                "fcplg_face_" +
-                currentEmployee.initials
-            );
-
-
-            referenceDescriptor =
-                null;
-
+        () => {
+            referenceDescriptor = null;
 
             console.log(
-                "Local saved face cleared."
+                "Local face reference cleared."
             );
-
         },
-
 
     loadSavedFace:
-        function () {
+        async () => {
 
             if (!currentEmployee) {
 
                 console.log(
-                    "No employee selected."
+                    "Enter initials first."
                 );
 
                 return;
-
             }
-
-
-            try {
-
-                const saved =
-                    localStorage.getItem(
-                        "fcplg_face_" +
-                        currentEmployee.initials
-                    );
-
-
-                if (saved) {
-
-                    referenceDescriptor =
-                        JSON.parse(
-                            saved
-                        );
-
-                    console.log(
-                        "Local backup face loaded."
-                    );
-
-                }
-
-            } catch (error) {
-
-                console.error(
-                    "Unable to load local face backup.",
-                    error
-                );
-
-            }
-
-        },
-
-
-    clearLocalFace:
-        function () {
-
-            if (!currentEmployee) {
-
-                return;
-
-            }
-
-
-            localStorage.removeItem(
-                "fcplg_face_" +
-                currentEmployee.initials
-            );
-
 
             referenceDescriptor =
-                null;
-
+                await getSavedFaceFromServer(
+                    currentEmployee.initials
+                );
 
             console.log(
-                "Local face backup deleted."
+                "Saved face loaded:",
+                referenceDescriptor
+                    ? "YES"
+                    : "NO"
             );
-
         },
-
 
     stopCamera:
         stopCamera
-
 };
 
 
 /* =========================================================
-   PAGE CLEANUP
+   CLEANUP
    ========================================================= */
 
 window.addEventListener(
     "beforeunload",
-    function () {
-
-        stopCamera();
-
-    }
+    stopCamera
 );
